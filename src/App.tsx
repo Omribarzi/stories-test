@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AppProvider, useApp } from "@/contexts/AppContext";
 
 // Public Pages
@@ -24,13 +24,16 @@ const queryClient = new QueryClient();
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, onboardingComplete } = useApp();
+  const location = useLocation();
+  
+  const redirectState = { from: location.pathname + location.search };
   
   if (!isAuthenticated) {
-    return <Navigate to="/start" replace />;
+    return <Navigate to="/start" state={redirectState} replace />;
   }
   
   if (!onboardingComplete) {
-    return <Navigate to="/start" replace />;
+    return <Navigate to="/start" state={redirectState} replace />;
   }
   
   return <>{children}</>;
