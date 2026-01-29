@@ -10,9 +10,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+/**
+ * HomePage acts as a MEDIATOR, not a static page.
+ * 
+ * Decision logic (computed in AppContext):
+ * 1. Continue active series → "ממשיכים עם...?"
+ * 2. Tonight's story → "הסיפור של הערב"
+ * 
+ * This screen presents ONE primary suggestion only.
+ * Browse is an escape hatch, not a primary path.
+ */
 export default function HomePage() {
   const navigate = useNavigate();
-  const { family, selectedChildId, selectChild, currentSuggestion } = useApp();
+  const { family, selectedChildId, selectChild, eveningSuggestion } = useApp();
 
   // Get display info
   const selectedChild = selectedChildId 
@@ -22,9 +32,10 @@ export default function HomePage() {
   const displayMode = selectedChildId ? 'child' : 'family';
   const hasMultipleChildren = (family?.children.length || 0) > 1;
 
+  // Primary action: Start the ritual flow
   const handleStartEvening = () => {
-    if (currentSuggestion) {
-      navigate(`/app/story/${currentSuggestion.storyId}/context`);
+    if (eveningSuggestion) {
+      navigate(`/app/story/${eveningSuggestion.storyId}/context`);
     }
   };
 
@@ -49,19 +60,19 @@ export default function HomePage() {
             </p>
           </div>
 
-          {/* Main Suggestion */}
-          {currentSuggestion && (
+          {/* Primary Suggestion - ONE CHOICE ONLY */}
+          {eveningSuggestion && (
             <div className="animate-fade-up" style={{ animationDelay: '0.1s' }}>
               {/* Suggestion Card */}
               <div className="bg-card rounded-2xl p-8 shadow-card mb-6">
                 <p className="text-lg font-medium mb-2">
-                  {currentSuggestion.message}
+                  {eveningSuggestion.message}
                 </p>
                 <p className="text-muted-foreground text-sm mb-8">
-                  {currentSuggestion.title}
+                  {eveningSuggestion.title}
                 </p>
 
-                {/* Primary CTA */}
+                {/* Primary CTA - This is THE path */}
                 <Button 
                   size="lg" 
                   onClick={handleStartEvening}
@@ -72,10 +83,11 @@ export default function HomePage() {
                 </Button>
               </div>
 
-              {/* Secondary option */}
+              {/* Escape hatch - secondary, not prominent */}
               <Button
                 variant="ghost"
-                className="text-muted-foreground"
+                size="sm"
+                className="text-muted-foreground text-xs"
                 onClick={() => navigate('/app/browse')}
               >
                 או לבחור משהו אחר
@@ -83,7 +95,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Child Selector - only if multiple children */}
+          {/* Child Selector - only if multiple children, very subtle */}
           {hasMultipleChildren && (
             <div className="mt-12 animate-fade-in" style={{ animationDelay: '0.2s' }}>
               <DropdownMenu>
