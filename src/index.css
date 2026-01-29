@@ -2,95 +2,114 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
+/* 
+  Sipurim Sheli – Design System
+  A calm, evening-focused palette for bedtime stories
+  Hebrew-first, RTL by default
 */
+
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Heebo:wght@300;400;500;600;700&display=swap');
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Evening palette – warm, calm, sleep-inducing */
+    --background: 240 20% 98%;
+    --foreground: 240 20% 20%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 240 20% 20%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 240 20% 20%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Primary – Deep indigo, calming */
+    --primary: 245 40% 45%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Secondary – Soft lavender */
+    --secondary: 250 30% 94%;
+    --secondary-foreground: 245 40% 35%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* Muted – Gentle gray-blue */
+    --muted: 240 15% 93%;
+    --muted-foreground: 240 10% 50%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Accent – Warm amber for gentle highlights */
+    --accent: 35 80% 92%;
+    --accent-foreground: 35 60% 30%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    /* Evening warmth – soft golden */
+    --evening: 35 70% 55%;
+    --evening-foreground: 35 90% 15%;
+    --evening-glow: 35 80% 70%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    /* Story colors */
+    --story-bg: 45 50% 97%;
+    --story-text: 30 20% 25%;
 
-    --radius: 0.5rem;
+    /* Trust/safety green */
+    --safe: 160 40% 45%;
+    --safe-foreground: 0 0% 100%;
 
-    --sidebar-background: 0 0% 98%;
+    /* Destructive – rarely used */
+    --destructive: 0 60% 55%;
+    --destructive-foreground: 0 0% 100%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --border: 240 15% 88%;
+    --input: 240 15% 88%;
+    --ring: 245 40% 45%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --radius: 0.75rem;
 
-    --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Shadows */
+    --shadow-soft: 0 2px 8px -2px hsl(240 20% 20% / 0.08);
+    --shadow-card: 0 4px 16px -4px hsl(240 20% 20% / 0.1);
+    --shadow-elevated: 0 8px 32px -8px hsl(240 20% 20% / 0.15);
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    /* Night mode – deep, cozy, sleep-friendly */
+    --background: 245 25% 10%;
+    --foreground: 45 20% 90%;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --card: 245 25% 13%;
+    --card-foreground: 45 20% 90%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 245 25% 13%;
+    --popover-foreground: 45 20% 90%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 245 35% 65%;
+    --primary-foreground: 245 25% 10%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 245 20% 18%;
+    --secondary-foreground: 45 20% 85%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 245 20% 18%;
+    --muted-foreground: 240 10% 55%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 35 50% 25%;
+    --accent-foreground: 35 60% 85%;
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --evening: 35 60% 45%;
+    --evening-foreground: 35 90% 95%;
+    --evening-glow: 35 50% 35%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --story-bg: 245 20% 15%;
+    --story-text: 45 20% 88%;
+
+    --safe: 160 30% 40%;
+    --safe-foreground: 0 0% 100%;
+
+    --destructive: 0 50% 40%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 245 20% 20%;
+    --input: 245 20% 20%;
+    --ring: 245 35% 65%;
+
+    --shadow-soft: 0 2px 8px -2px hsl(0 0% 0% / 0.3);
+    --shadow-card: 0 4px 16px -4px hsl(0 0% 0% / 0.4);
+    --shadow-elevated: 0 8px 32px -8px hsl(0 0% 0% / 0.5);
   }
 }
 
@@ -99,7 +118,86 @@ All colors MUST be HSL.
     @apply border-border;
   }
 
+  html {
+    direction: rtl;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  /* Hebrew typography */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+
+  /* Story reading mode */
+  .story-text {
+    @apply font-body text-lg leading-relaxed tracking-wide;
+    font-feature-settings: "kern" 1;
+  }
+
+  /* Focus states that work with RTL */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer utilities {
+  /* Evening gradient for hero sections */
+  .gradient-evening {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--background)) 0%,
+      hsl(var(--accent) / 0.3) 50%,
+      hsl(var(--evening) / 0.2) 100%
+    );
+  }
+
+  /* Warm glow effect */
+  .glow-warm {
+    box-shadow: 0 0 40px -10px hsl(var(--evening-glow) / 0.5);
+  }
+
+  /* Calm card effect */
+  .card-calm {
+    @apply bg-card rounded-xl;
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Story container */
+  .story-container {
+    @apply bg-story rounded-2xl p-8;
+    max-width: 680px;
+    margin: 0 auto;
+  }
+
+  /* Fade animations for calm transitions */
+  .fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+
+  .slide-up {
+    animation: slideUp 0.5s ease-out forwards;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 }
