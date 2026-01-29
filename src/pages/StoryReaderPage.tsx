@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -11,8 +11,13 @@ export default function StoryReaderPage() {
 
   const story = mockStories.find(s => s.id === storyId);
 
+  useEffect(() => {
+    if (!story) {
+      navigate('/app');
+    }
+  }, [story, navigate]);
+
   if (!story) {
-    navigate('/app');
     return null;
   }
 
