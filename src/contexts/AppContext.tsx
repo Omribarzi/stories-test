@@ -95,7 +95,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setFamily(mockFamily);
       setSubscription(mockSubscription);
       // Initialize with no active progress (fresh start)
-      setReadingProgress(null);
+      setReadingProgress({});
     } else {
       setFamily(null);
       setSubscription(null);
@@ -142,7 +142,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           [progressKey]: {
             ...currentProgress,
             lastStoryId: storyId,
-            completedStories: [...currentProgress.completedStories, storyId],
+            // Defensive de-dupe
+            completedStories: Array.from(
+              new Set([...currentProgress.completedStories, storyId])
+            ),
             lastReadAt: new Date(),
           },
         };
