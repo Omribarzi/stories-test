@@ -8,10 +8,10 @@ import { useApp } from '@/contexts/AppContext';
 
 export default function SettingsPage() {
   const navigate = useNavigate();
-  const { family, subscription, setAuthenticated } = useApp();
+  const { family, subscription, signOut } = useApp();
 
-  const handleLogout = () => {
-    setAuthenticated(false);
+  const handleLogout = async () => {
+    await signOut();
     navigate('/');
   };
 
