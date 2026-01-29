@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
-import { Child, Family, EveningSuggestion, SubscriptionStatus } from '@/types';
-import { mockFamily, mockEveningSuggestion, mockSubscription } from '@/data/mock-data';
+import React, { createContext, useContext, useState, ReactNode, useMemo } from 'react';
+import { Child, Family, EveningSuggestion, SubscriptionStatus, ReadingProgress } from '@/types';
+import { mockFamily, mockSubscription, mockStories, mockSeries } from '@/data/mock-data';
 
 interface AppState {
   // User session
@@ -8,9 +8,12 @@ interface AppState {
   family: Family | null;
   subscription: SubscriptionStatus | null;
   
-  // Evening flow
+  // Evening flow - mediator state
   selectedChildId: string | null; // null = family mode
-  currentSuggestion: EveningSuggestion | null;
+  readingProgress: ReadingProgress | null; // Active series tracking
+  
+  // Computed suggestion (the mediator's decision)
+  eveningSuggestion: EveningSuggestion | null;
   
   // Onboarding
   onboardingComplete: boolean;
@@ -20,6 +23,7 @@ interface AppState {
   selectChild: (childId: string | null) => void;
   completeOnboarding: () => void;
   addChild: (child: Child) => void;
+  markStoryCompleted: (storyId: string) => void;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -29,26 +33,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [family, setFamily] = useState<Family | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
-  const [currentSuggestion, setCurrentSuggestion] = useState<EveningSuggestion | null>(null);
+  const [readingProgress, setReadingProgress] = useState<ReadingProgress | null>(null);
   const [onboardingComplete, setOnboardingComplete] = useState(false);
+
+  // THE MEDIATOR: Compute suggestion based on state priority
+  // Priority: 1. Continue active series → 2. Next story for child → 3. Start new series
+  const eveningSuggestion = useMemo((): EveningSuggestion | null => {
+    if (!isAuthenticated || !onboardingComplete) return null;
+
+    const selectedChild = selectedChildId 
+      ? family?.children.find(c => c.id === selectedChildId) 
+      : null;
+
+    // Priority 1: Continue active series
+    if (readingProgress) {
+      const currentSeries = mockSeries.find(s => s.id === readingProgress.seriesId);
+      const nextStory = mockStories.find(
+        s => s.seriesId === readingProgress.seriesId && 
+             !readingProgress.completedStories.includes(s.id)
+      );
+
+      if (nextStory && currentSeries) {
+        return {
+          type: 'continue',
+          childId: selectedChildId || undefined,
+          seriesId: readingProgress.seriesId,
+          storyId: nextStory.id,
+          title: nextStory.title,
+          message: `ממשיכים עם "${currentSeries.title}"?`,
+        };
+      }
+    }
+
+    // Priority 2: Tonight's story (first story of recommended series)
+    const firstSeries = mockSeries[0];
+    const firstStory = mockStories.find(s => s.seriesId === firstSeries?.id);
+    
+    if (firstStory && firstSeries) {
+      return {
+        type: selectedChildId ? 'new' : 'family',
+        childId: selectedChildId || undefined,
+        seriesId: firstSeries.id,
+        storyId: firstStory.id,
+        title: firstStory.title,
+        message: selectedChild 
+          ? `סיפור הלילה של ${selectedChild.name}` 
+          : 'הסיפור של הערב',
+      };
+    }
+
+    return null;
+  }, [isAuthenticated, onboardingComplete, family, selectedChildId, readingProgress]);
 
   const handleSetAuthenticated = (value: boolean) => {
     setAuthenticated(value);
     if (value) {
-      // Mock: Load family data on auth
+      // Load family data on auth
       setFamily(mockFamily);
       setSubscription(mockSubscription);
-      setCurrentSuggestion(mockEveningSuggestion);
+      // Initialize with no active progress (fresh start)
+      setReadingProgress(null);
     } else {
       setFamily(null);
       setSubscription(null);
-      setCurrentSuggestion(null);
+      setReadingProgress(null);
     }
   };
 
   const selectChild = (childId: string | null) => {
     setSelectedChildId(childId);
-    // In real app: would fetch personalized suggestion
+    // In production: would fetch child-specific progress
   };
 
   const completeOnboarding = () => {
@@ -64,6 +118,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const markStoryCompleted = (storyId: string) => {
+    const story = mockStories.find(s => s.id === storyId);
+    if (!story) return;
+
+    setReadingProgress(prev => {
+      if (prev && prev.seriesId === story.seriesId) {
+        // Update existing progress
+        return {
+          ...prev,
+          lastStoryId: storyId,
+          completedStories: [...prev.completedStories, storyId],
+          lastReadAt: new Date(),
+        };
+      }
+      // Start new progress for this series
+      return {
+        seriesId: story.seriesId,
+        lastStoryId: storyId,
+        completedStories: [storyId],
+        startedAt: new Date(),
+        lastReadAt: new Date(),
+      };
+    });
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -71,12 +150,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         family,
         subscription,
         selectedChildId,
-        currentSuggestion,
+        readingProgress,
+        eveningSuggestion,
         onboardingComplete,
         setAuthenticated: handleSetAuthenticated,
         selectChild,
         completeOnboarding,
         addChild,
+        markStoryCompleted,
       }}
     >
       {children}

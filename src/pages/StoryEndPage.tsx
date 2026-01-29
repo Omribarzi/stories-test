@@ -1,15 +1,24 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Moon, MessageCircle, Home } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { mockStories } from '@/data/mock-data';
+import { useApp } from '@/contexts/AppContext';
 
 export default function StoryEndPage() {
   const { storyId } = useParams();
   const navigate = useNavigate();
+  const { markStoryCompleted } = useApp();
   const [showQuestions, setShowQuestions] = useState(false);
 
   const story = mockStories.find(s => s.id === storyId);
+
+  // Mark story as completed when reaching end screen
+  useEffect(() => {
+    if (storyId) {
+      markStoryCompleted(storyId);
+    }
+  }, [storyId, markStoryCompleted]);
 
   if (!story) {
     navigate('/app');
