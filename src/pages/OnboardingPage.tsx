@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Moon, Sparkles, ArrowLeft, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,11 @@ export default function OnboardingPage() {
   const [childName, setChildName] = useState('');
   const [childAge, setChildAge] = useState<number | ''>('');
   const navigate = useNavigate();
+  const location = useLocation();
   const { setAuthenticated, addChild, completeOnboarding } = useApp();
+
+  // Get redirect target from state (set by ProtectedRoute) or default to /app
+  const redirectTo = (location.state as { from?: string } | null)?.from || '/app';
 
   const handleEmailSubmit = () => {
     if (email.includes('@')) {
@@ -45,7 +49,7 @@ export default function OnboardingPage() {
   const handleComplete = () => {
     setAuthenticated(true);
     completeOnboarding();
-    navigate('/app');
+    navigate(redirectTo, { replace: true });
   };
 
   return (
