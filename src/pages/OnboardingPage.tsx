@@ -1,35 +1,74 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Moon, Sparkles, ArrowLeft, User } from 'lucide-react';
+import { Moon, Sparkles, ArrowLeft, User, Mail, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useApp } from '@/contexts/AppContext';
+import { supabase } from '@/integrations/supabase/client';
 import { Child } from '@/types';
 
-type OnboardingStep = 'welcome' | 'email' | 'child' | 'avatar' | 'ready';
+type OnboardingStep = 'welcome' | 'email' | 'email-sent' | 'child' | 'avatar' | 'ready';
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<OnboardingStep>('welcome');
   const [email, setEmail] = useState('');
   const [childName, setChildName] = useState('');
   const [childAge, setChildAge] = useState<number | ''>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  
   const navigate = useNavigate();
   const location = useLocation();
-  const { setAuthenticated, addChild, completeOnboarding } = useApp();
+  const { isAuthenticated, isLoading, onboardingComplete, addChild, completeOnboarding } = useApp();
 
   // Get redirect target from state (set by ProtectedRoute) or default to /app
   const redirectTo = (location.state as { from?: string } | null)?.from || '/app';
 
-  const handleEmailSubmit = () => {
-    if (email.includes('@')) {
-      setStep('child');
+  // Handle returning from magic link
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      if (onboardingComplete) {
+        // Already completed onboarding, go to app
+        navigate(redirectTo, { replace: true });
+      } else {
+        // Authenticated but needs to complete child setup
+        setStep('child');
+      }
+    }
+  }, [isAuthenticated, isLoading, onboardingComplete, navigate, redirectTo]);
+
+  const handleEmailSubmit = async () => {
+    if (!email.includes('@')) return;
+    
+    setIsSubmitting(true);
+    setEmailError(null);
+    
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/start`,
+        },
+      });
+
+      if (error) {
+        console.error('Magic link error:', error);
+        setEmailError(error.message);
+        return;
+      }
+
+      setStep('email-sent');
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      setEmailError('שגיאה בשליחת המייל. נסו שוב.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleChildSubmit = () => {
     if (childName && childAge) {
-      // In real app: API call to create child
       const newChild: Child = {
         id: `child-${Date.now()}`,
         name: childName,
@@ -47,10 +86,18 @@ export default function OnboardingPage() {
   };
 
   const handleComplete = () => {
-    setAuthenticated(true);
     completeOnboarding();
     navigate(redirectTo, { replace: true });
   };
+
+  // Show loading while checking auth state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-8 h-8 animate-spin text-evening" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -59,10 +106,11 @@ export default function OnboardingPage() {
         <div 
           className="h-full bg-evening transition-all duration-500"
           style={{ 
-            width: step === 'welcome' ? '20%' 
-                 : step === 'email' ? '40%'
-                 : step === 'child' ? '60%'
-                 : step === 'avatar' ? '80%'
+            width: step === 'welcome' ? '16%' 
+                 : step === 'email' ? '33%'
+                 : step === 'email-sent' ? '50%'
+                 : step === 'child' ? '66%'
+                 : step === 'avatar' ? '83%'
                  : '100%'
           }}
         />
@@ -114,22 +162,66 @@ export default function OnboardingPage() {
                     placeholder="parent@example.com"
                     className="mt-2 text-left"
                     dir="ltr"
+                    disabled={isSubmitting}
                   />
+                  {emailError && (
+                    <p className="text-sm text-destructive mt-2">{emailError}</p>
+                  )}
                 </div>
                 
                 <Button 
                   className="w-full" 
                   size="lg" 
                   onClick={handleEmailSubmit}
-                  disabled={!email.includes('@')}
+                  disabled={!email.includes('@') || isSubmitting}
                 >
-                  המשך
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 ml-2 animate-spin" />
+                      שולח...
+                    </>
+                  ) : (
+                    'המשך'
+                  )}
                 </Button>
                 
                 <p className="text-xs text-muted-foreground text-center">
-                  לא נשלח לכם שום דבר. רק לצורך שמירת החשבון.
+                  נשלח לכם קישור כניסה למייל. בלי סיסמאות.
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Step: Email Sent - Wait for magic link */}
+          {step === 'email-sent' && (
+            <div className="text-center animate-fade-up">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-evening/10 mb-8">
+                <Mail className="w-10 h-10 text-evening" />
+              </div>
+              <h2 className="text-2xl font-display font-bold mb-4">
+                בדקו את המייל
+              </h2>
+              <p className="text-muted-foreground text-lg mb-4">
+                שלחנו קישור כניסה ל-
+                <br />
+                <span className="font-medium text-foreground" dir="ltr">{email}</span>
+              </p>
+              <p className="text-sm text-muted-foreground mb-8">
+                לחצו על הקישור במייל כדי להמשיך.
+                <br />
+                הקישור תקף ל-60 דקות.
+              </p>
+              
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={() => {
+                  setStep('email');
+                  setEmailError(null);
+                }}
+              >
+                שלחו שוב או נסו מייל אחר
+              </Button>
             </div>
           )}
 
@@ -221,16 +313,13 @@ export default function OnboardingPage() {
         </div>
       </div>
 
-      {/* Back button - not on welcome or avatar */}
-      {step !== 'welcome' && step !== 'avatar' && step !== 'ready' && (
+      {/* Back button - only on email step */}
+      {step === 'email' && (
         <div className="p-6 text-center">
           <Button 
             variant="ghost" 
             size="sm"
-            onClick={() => {
-              if (step === 'email') setStep('welcome');
-              if (step === 'child') setStep('email');
-            }}
+            onClick={() => setStep('welcome')}
           >
             חזרה
           </Button>

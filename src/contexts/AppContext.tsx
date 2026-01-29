@@ -1,10 +1,17 @@
-import React, { createContext, useContext, useState, ReactNode, useMemo } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useMemo, useEffect } from 'react';
+import { Session, User } from '@supabase/supabase-js';
 import { Child, Family, EveningSuggestion, SubscriptionStatus, ReadingProgress } from '@/types';
 import { mockFamily, mockSubscription, mockStories, mockSeries } from '@/data/mock-data';
+import { supabase } from '@/integrations/supabase/client';
 
 interface AppState {
-  // User session
+  // User session - real Supabase auth
   isAuthenticated: boolean;
+  session: Session | null;
+  user: User | null;
+  isLoading: boolean; // Auth loading state
+  
+  // Family data
   family: Family | null;
   subscription: SubscriptionStatus | null;
   
@@ -19,25 +26,86 @@ interface AppState {
   onboardingComplete: boolean;
   
   // Actions
-  setAuthenticated: (value: boolean) => void;
   selectChild: (childId: string | null) => void;
   completeOnboarding: () => void;
   addChild: (child: Child) => void;
   markStoryCompleted: (storyId: string) => void;
+  signOut: () => Promise<void>;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setAuthenticated] = useState(false);
+  // Auth state - driven by Supabase
+  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  // App state
   const [family, setFamily] = useState<Family | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
   const [readingProgress, setReadingProgress] = useState<Record<string, ReadingProgress>>({});
   const [onboardingComplete, setOnboardingComplete] = useState(false);
 
+  // Derived auth state
+  const isAuthenticated = !!session;
+
+  // Initialize auth state
+  useEffect(() => {
+    // Set up auth state listener FIRST
+    const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(
+      (event, newSession) => {
+        console.log('Auth state change:', event, newSession?.user?.email);
+        setSession(newSession);
+        setUser(newSession?.user ?? null);
+        setIsLoading(false);
+
+        // Load family data when authenticated
+        if (newSession?.user) {
+          // Defer data fetching to avoid deadlock
+          setTimeout(() => {
+            loadUserData(newSession.user.id);
+          }, 0);
+        } else {
+          // Clear data on sign out
+          setFamily(null);
+          setSubscription(null);
+          setReadingProgress({});
+          setOnboardingComplete(false);
+        }
+      }
+    );
+
+    // THEN check for existing session
+    supabase.auth.getSession().then(({ data: { session: existingSession } }) => {
+      setSession(existingSession);
+      setUser(existingSession?.user ?? null);
+      setIsLoading(false);
+
+      if (existingSession?.user) {
+        loadUserData(existingSession.user.id);
+      }
+    });
+
+    return () => authSubscription.unsubscribe();
+  }, []);
+
+  // Load user data (mock for now, will use Supabase tables later)
+  const loadUserData = async (userId: string) => {
+    console.log('Loading user data for:', userId);
+    
+    // For now, use mock data - in production, fetch from Supabase
+    setFamily(mockFamily);
+    setSubscription(mockSubscription);
+    
+    // Check if user has completed onboarding (has children)
+    // In production: query profiles/children tables
+    const hasCompletedOnboarding = mockFamily.children.length > 0;
+    setOnboardingComplete(hasCompletedOnboarding);
+  };
+
   // THE MEDIATOR: Compute suggestion based on state priority
-  // Priority: 1. Continue active series → 2. Next story for child → 3. Start new series
   const eveningSuggestion = useMemo((): EveningSuggestion | null => {
     if (!isAuthenticated || !onboardingComplete) return null;
 
@@ -68,7 +136,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Priority 2: Tonight's story (first story of recommended series)
+    // Priority 2: Tonight's story
     const firstSeries = mockSeries[0];
     const firstStory = mockStories.find(s => s.seriesId === firstSeries?.id);
     
@@ -88,24 +156,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return null;
   }, [isAuthenticated, onboardingComplete, family, selectedChildId, readingProgress]);
 
-  const handleSetAuthenticated = (value: boolean) => {
-    setAuthenticated(value);
-    if (value) {
-      // Load family data on auth
-      setFamily(mockFamily);
-      setSubscription(mockSubscription);
-      // Initialize with no active progress (fresh start)
-      setReadingProgress({});
-    } else {
-      setFamily(null);
-      setSubscription(null);
-      setReadingProgress({});
-    }
-  };
-
   const selectChild = (childId: string | null) => {
     setSelectedChildId(childId);
-    // In production: would fetch child-specific progress
   };
 
   const completeOnboarding = () => {
@@ -117,6 +169,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setFamily({
         ...family,
         children: [...family.children, child],
+      });
+    } else {
+      // Create new family with the child
+      setFamily({
+        id: `family-${Date.now()}`,
+        parentEmail: user?.email || '',
+        children: [child],
+        members: [],
+        createdAt: new Date(),
       });
     }
   };
@@ -130,19 +191,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setReadingProgress(prev => {
       const currentProgress = prev[progressKey];
       
-      // Prevent duplicates
       if (currentProgress?.completedStories.includes(storyId)) {
         return prev;
       }
 
       if (currentProgress && currentProgress.seriesId === story.seriesId) {
-        // Update existing progress
         return {
           ...prev,
           [progressKey]: {
             ...currentProgress,
             lastStoryId: storyId,
-            // Defensive de-dupe
             completedStories: Array.from(
               new Set([...currentProgress.completedStories, storyId])
             ),
@@ -150,7 +208,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           },
         };
       }
-      // Start new progress for this series
+      
       return {
         ...prev,
         [progressKey]: {
@@ -164,19 +222,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const signOut = async () => {
+    await supabase.auth.signOut();
+  };
+
   const value: AppState = {
     isAuthenticated,
+    session,
+    user,
+    isLoading,
     family,
     subscription,
     selectedChildId,
     readingProgress,
     eveningSuggestion,
     onboardingComplete,
-    setAuthenticated: handleSetAuthenticated,
     selectChild,
     completeOnboarding,
     addChild,
     markStoryCompleted,
+    signOut,
   };
 
   return (

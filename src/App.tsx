@@ -23,10 +23,15 @@ const queryClient = new QueryClient();
 
 // Protected route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, onboardingComplete } = useApp();
+  const { isAuthenticated, isLoading, onboardingComplete } = useApp();
   const location = useLocation();
   
   const redirectState = { from: location.pathname + location.search };
+  
+  // Show nothing while loading auth state
+  if (isLoading) {
+    return null;
+  }
   
   if (!isAuthenticated) {
     return <Navigate to="/start" state={redirectState} replace />;
