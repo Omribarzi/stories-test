@@ -161,23 +161,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const value: AppState = {
+    isAuthenticated,
+    family,
+    subscription,
+    selectedChildId,
+    readingProgress,
+    eveningSuggestion,
+    onboardingComplete,
+    setAuthenticated: handleSetAuthenticated,
+    selectChild,
+    completeOnboarding,
+    addChild,
+    markStoryCompleted,
+  };
+
   return (
-    <AppContext.Provider
-      value={{
-        isAuthenticated,
-        family,
-        subscription,
-        selectedChildId,
-        readingProgress,
-        eveningSuggestion,
-        onboardingComplete,
-        setAuthenticated: handleSetAuthenticated,
-        selectChild,
-        completeOnboarding,
-        addChild,
-        markStoryCompleted,
-      }}
-    >
+    <AppContext.Provider value={value}>
       {children}
     </AppContext.Provider>
   );
