@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Moon, MessageCircle, Home } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -10,18 +10,26 @@ export default function StoryEndPage() {
   const navigate = useNavigate();
   const { markStoryCompleted } = useApp();
   const [showQuestions, setShowQuestions] = useState(false);
+  const hasMarkedComplete = useRef(false);
 
   const story = mockStories.find(s => s.id === storyId);
 
-  // Mark story as completed when reaching end screen
+  // Redirect if story not found
   useEffect(() => {
-    if (storyId) {
+    if (!story) {
+      navigate('/app');
+    }
+  }, [story, navigate]);
+
+  // Mark story as completed when reaching end screen (once only)
+  useEffect(() => {
+    if (storyId && !hasMarkedComplete.current) {
+      hasMarkedComplete.current = true;
       markStoryCompleted(storyId);
     }
   }, [storyId, markStoryCompleted]);
 
   if (!story) {
-    navigate('/app');
     return null;
   }
 
@@ -96,7 +104,7 @@ export default function StoryEndPage() {
 
           {/* Soft next suggestion */}
           <p className="text-sm text-muted-foreground mt-8 animate-fade-in" style={{ animationDelay: '0.3s' }}>
-            מחר נמשיך עם הפרק הבא ✨
+            מחר נמשיך עם הפרק הבא
           </p>
 
         </div>

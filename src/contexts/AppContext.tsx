@@ -10,7 +10,7 @@ interface AppState {
   
   // Evening flow - mediator state
   selectedChildId: string | null; // null = family mode
-  readingProgress: ReadingProgress | null; // Active series tracking
+  readingProgress: Record<string, ReadingProgress>; // Keyed by childId, "family" for family mode
   
   // Computed suggestion (the mediator's decision)
   eveningSuggestion: EveningSuggestion | null;
@@ -33,7 +33,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [family, setFamily] = useState<Family | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
-  const [readingProgress, setReadingProgress] = useState<ReadingProgress | null>(null);
+  const [readingProgress, setReadingProgress] = useState<Record<string, ReadingProgress>>({});
   const [onboardingComplete, setOnboardingComplete] = useState(false);
 
   // THE MEDIATOR: Compute suggestion based on state priority
@@ -41,23 +41,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const eveningSuggestion = useMemo((): EveningSuggestion | null => {
     if (!isAuthenticated || !onboardingComplete) return null;
 
+    const progressKey = selectedChildId || 'family';
+    const currentProgress = readingProgress[progressKey];
+
     const selectedChild = selectedChildId 
       ? family?.children.find(c => c.id === selectedChildId) 
       : null;
 
     // Priority 1: Continue active series
-    if (readingProgress) {
-      const currentSeries = mockSeries.find(s => s.id === readingProgress.seriesId);
+    if (currentProgress) {
+      const currentSeries = mockSeries.find(s => s.id === currentProgress.seriesId);
       const nextStory = mockStories.find(
-        s => s.seriesId === readingProgress.seriesId && 
-             !readingProgress.completedStories.includes(s.id)
+        s => s.seriesId === currentProgress.seriesId && 
+             !currentProgress.completedStories.includes(s.id)
       );
 
       if (nextStory && currentSeries) {
         return {
           type: 'continue',
           childId: selectedChildId || undefined,
-          seriesId: readingProgress.seriesId,
+          seriesId: currentProgress.seriesId,
           storyId: nextStory.id,
           title: nextStory.title,
           message: `ממשיכים עם "${currentSeries.title}"?`,
@@ -96,7 +99,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } else {
       setFamily(null);
       setSubscription(null);
-      setReadingProgress(null);
+      setReadingProgress({});
     }
   };
 
@@ -122,23 +125,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const story = mockStories.find(s => s.id === storyId);
     if (!story) return;
 
+    const progressKey = selectedChildId || 'family';
+
     setReadingProgress(prev => {
-      if (prev && prev.seriesId === story.seriesId) {
+      const currentProgress = prev[progressKey];
+      
+      // Prevent duplicates
+      if (currentProgress?.completedStories.includes(storyId)) {
+        return prev;
+      }
+
+      if (currentProgress && currentProgress.seriesId === story.seriesId) {
         // Update existing progress
         return {
           ...prev,
-          lastStoryId: storyId,
-          completedStories: [...prev.completedStories, storyId],
-          lastReadAt: new Date(),
+          [progressKey]: {
+            ...currentProgress,
+            lastStoryId: storyId,
+            completedStories: [...currentProgress.completedStories, storyId],
+            lastReadAt: new Date(),
+          },
         };
       }
       // Start new progress for this series
       return {
-        seriesId: story.seriesId,
-        lastStoryId: storyId,
-        completedStories: [storyId],
-        startedAt: new Date(),
-        lastReadAt: new Date(),
+        ...prev,
+        [progressKey]: {
+          seriesId: story.seriesId,
+          lastStoryId: storyId,
+          completedStories: [storyId],
+          startedAt: new Date(),
+          lastReadAt: new Date(),
+        },
       };
     });
   };
