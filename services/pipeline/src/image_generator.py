@@ -118,7 +118,8 @@ class ImageGenerator:
             raise ImportError("Please install: pip install google-genai")
 
         # בחירת מודל (צריך models/ prefix)
-        model = "models/gemini-3-pro-image-preview" if use_pro else "models/gemini-2.5-flash-image"
+        from model_config import GEMINI_IMAGE_MODEL_PRO, GEMINI_IMAGE_MODEL_FLASH
+        model = GEMINI_IMAGE_MODEL_PRO if use_pro else GEMINI_IMAGE_MODEL_FLASH
 
         # שילוב negative prompt בפרומפט (Gemini לא תומך בנפרד)
         full_prompt = prompt

@@ -590,6 +590,7 @@ def main():
     parser.add_argument('child_name', help='שם הילד/ה')
     parser.add_argument('age', type=int, help='גיל')
     parser.add_argument('topic', help='נושא הסיפור')
+    parser.add_argument('--pages', type=int, default=10, help='מספר עמודים (ברירת מחדל: 10)')
     args = parser.parse_args()
 
     print("="*80)
@@ -604,7 +605,7 @@ def main():
 
     try:
         # Stage 1: Story
-        story_data = step1_generate_story(run, num_pages=10)
+        story_data = step1_generate_story(run, num_pages=args.pages)
 
         # Stage 3: Images
         image_results = step3_generate_images(run, story_data, max_retries=3)

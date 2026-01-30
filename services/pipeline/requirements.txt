@@ -12,3 +12,4 @@ arabic-reshaper
 python-bidi
 nakdimon
 requests
+PyMuPDF==1.23.26

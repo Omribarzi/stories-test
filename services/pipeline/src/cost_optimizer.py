@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from anthropic import Anthropic
 from openai import OpenAI
 import google.generativeai as genai
+from model_config import GEMINI_TEXT_MODEL
 
 load_dotenv()
 
@@ -48,7 +49,7 @@ class CostOptimizer:
 
     def get_gemini(self) -> str:
         """מחזיר Gemini (Flash - חינם!)"""
-        return "gemini-2.0-flash-exp"
+        return GEMINI_TEXT_MODEL
 
     def estimate_tokens(self, text: str) -> int:
         """

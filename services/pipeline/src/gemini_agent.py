@@ -6,6 +6,7 @@ import json
 from typing import Dict, List
 from dotenv import load_dotenv
 import google.generativeai as genai
+from model_config import GEMINI_TEXT_MODEL, GEMINI_TIMEOUT_SEC
 
 load_dotenv()
 
@@ -13,7 +14,7 @@ load_dotenv()
 class GeminiAgent:
     def __init__(self, model: str = None):
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+        self.model_name = model or GEMINI_TEXT_MODEL
         self.model = genai.GenerativeModel(self.model_name)
 
     def enhance_visual_descriptions(self, story: Dict, style_guide: Dict) -> Dict:
@@ -80,7 +81,8 @@ class GeminiAgent:
                 generation_config=genai.GenerationConfig(
                     temperature=0.7,
                     response_mime_type="application/json"
-                )
+                ),
+                request_options={"timeout": GEMINI_TIMEOUT_SEC}
             )
 
             enhanced_visual = json.loads(response.text)
@@ -131,7 +133,8 @@ class GeminiAgent:
             generation_config=genai.GenerationConfig(
                 temperature=0.5,
                 response_mime_type="application/json"
-            )
+            ),
+            request_options={"timeout": GEMINI_TIMEOUT_SEC}
         )
 
         return json.loads(response.text)

@@ -199,7 +199,8 @@ CRITICAL:
         full_prompt = f"{prompt}\n\nAVOID: {negative_prompt}"
 
         # Use Pro for covers, Flash for interior
-        model = "models/gemini-3-pro-image-preview" if page_type == "cover" else "models/gemini-2.5-flash-image"
+        from model_config import GEMINI_IMAGE_MODEL_PRO, GEMINI_IMAGE_MODEL_FLASH
+        model = GEMINI_IMAGE_MODEL_PRO if page_type == "cover" else GEMINI_IMAGE_MODEL_FLASH
 
         client = genai.Client(api_key=self.api_key)
 
