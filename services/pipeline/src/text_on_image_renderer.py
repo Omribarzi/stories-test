@@ -16,9 +16,18 @@ class TextOnImageRenderer:
     משרטט טקסט עברי מנוקד על תמונות בפונטים מקצועיים
     """
 
+    # Base directory for resolving relative font paths
+    _BASE_DIR = Path(__file__).resolve().parent.parent
+
     # פונטים מקצועיים לספרי ילדים (לפי סדר עדיפות)
     # SF Hebrew אינו עובד כראוי עם PIL/Pillow - גורם לסימנים מוזרים
     BEAUTIFUL_FONTS = [
+        # Noto Sans Hebrew - bundled in repo, works in Docker
+        {
+            "name": "Noto Sans Hebrew (Repo)",
+            "regular": "assets/fonts/NotoSansHebrew-Regular.ttf",
+            "bold": "assets/fonts/NotoSansHebrew-Regular.ttf",
+        },
         # Arial Unicode - עובד מצוין עם עברית ב-PIL
         {
             "name": "Arial Unicode",
@@ -43,14 +52,29 @@ class TextOnImageRenderer:
         self.text_processor = HebrewTextProcessor()
         self.font_config = self._find_available_font()
 
+    def _resolve_font_path(self, path: str) -> str:
+        """Resolve a font path — absolute paths stay as-is, relative paths resolve from _BASE_DIR."""
+        p = Path(path)
+        if p.is_absolute():
+            return str(p)
+        resolved = self._BASE_DIR / p
+        return str(resolved)
+
     def _find_available_font(self) -> dict:
         """מוצא את הפונט הטוב ביותר הזמין במערכת"""
         for font_config in self.BEAUTIFUL_FONTS:
-            if os.path.exists(font_config["regular"]):
-                print(f"✅ נמצא פונט: {font_config['name']}")
-                return font_config
+            resolved = self._resolve_font_path(font_config["regular"])
+            if os.path.exists(resolved):
+                print(f"✅ נמצא פונט: {font_config['name']} ({resolved})")
+                return {
+                    "name": font_config["name"],
+                    "regular": resolved,
+                    "bold": self._resolve_font_path(font_config["bold"]),
+                }
+            else:
+                print(f"⏭️  פונט לא נמצא: {font_config['name']} ({resolved})")
 
-        print("⚠️  לא נמצא פונט עברי מקצועי")
+        print("⚠️  לא נמצא פונט עברי מקצועי — using Pillow default")
         return {
             "name": "Default",
             "regular": None,

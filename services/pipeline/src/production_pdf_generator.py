@@ -23,8 +23,18 @@ class ProductionPDFGenerator:
     מחלקה ליצירת PDF מקצועי לספרי ילדים
     """
 
+    # Base directory for resolving relative font paths
+    _BASE_DIR = Path(__file__).resolve().parent.parent
+
     # Hebrew fonts for children (in order of preference)
     CHILD_FRIENDLY_FONTS = [
+        # Noto Sans Hebrew - bundled in repo, works in Docker
+        {
+            "name": "NotoSansHebrew",
+            "paths": [
+                "assets/fonts/NotoSansHebrew-Regular.ttf",
+            ]
+        },
         # Frank Ruehl - קלאסי וקריא
         {
             "name": "FrankRuehl",
@@ -63,16 +73,24 @@ class ProductionPDFGenerator:
         self.text_processor = HebrewTextProcessor()
         self.hebrew_font = self._load_font()
 
+    def _resolve_font_path(self, path: str) -> str:
+        """Resolve a font path — absolute paths stay as-is, relative paths resolve from _BASE_DIR."""
+        p = Path(path)
+        if p.is_absolute():
+            return str(p)
+        return str(self._BASE_DIR / p)
+
     def _load_font(self) -> str:
         """
         טוען פונט עברי מתאים לילדים
         """
         for font_config in self.CHILD_FRIENDLY_FONTS:
             for font_path in font_config["paths"]:
-                if os.path.exists(font_path):
+                resolved = self._resolve_font_path(font_path)
+                if os.path.exists(resolved):
                     try:
-                        pdfmetrics.registerFont(TTFont(font_config["name"], font_path))
-                        print(f"✅ טעון פונט: {font_config['name']} ({font_path})")
+                        pdfmetrics.registerFont(TTFont(font_config["name"], resolved))
+                        print(f"✅ טעון פונט: {font_config['name']} ({resolved})")
                         return font_config["name"]
                     except Exception as e:
                         print(f"⚠️  שגיאה בטעינת {font_config['name']}: {e}")
