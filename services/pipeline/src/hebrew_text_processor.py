@@ -115,8 +115,8 @@ VERIFICATION CHECKLIST BEFORE RESPONDING:
 □ Did I ONLY add nikud combining marks? (Must be YES)
 
 MANDATORY RULES YOU MUST FOLLOW:
-1. Add nikud to EVERY word (names, nouns, verbs, everything)
-2. NEVER skip words - children need complete nikud
+1. Add nikud to EVERY word — including proper names (איתי→אִיתַי, נועה→נוֹעָה, רועי→רוֹעִי, מיכל→מִיכַל)
+2. NEVER skip words - children need complete nikud. Short words and names MUST get nikud too
 3. Keep EXACT letter count - count Hebrew letters before and after, they must match EXACTLY
 4. Preserve ALL ו and י letters exactly as they appear - the author chose this spelling intentionally
 5. DO NOT apply any spelling "corrections" or "normalization" - just add nikud marks
@@ -221,7 +221,7 @@ Return ONLY the vocalized text with nikud marks added, no explanations or commen
                     return nikud_text
                 elif isinstance(result, str):
                     return result
-            except:
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 # Maybe it's plain text response
                 return response.text
 

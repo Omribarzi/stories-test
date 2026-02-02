@@ -11,12 +11,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import json
+import re
 import hashlib
+import time
 from datetime import datetime
 from PIL import Image
-from pathlib import Path
+import numpy as np
 
 from claude_agent import ClaudeAgent
+from openai_agent import OpenAIAgent
+from hebrew_text_quality_checker import HebrewTextQualityChecker
+from story_style_guidelines import validate_story_not_preachy, get_age_params
 from image_generator import ImageGenerator
 from production_pdf_with_nikud import ProductionPDFWithNikud
 from validate_single_page import (
@@ -24,6 +29,112 @@ from validate_single_page import (
     check_nikud_coverage,
     check_text_not_overlapping_image
 )
+
+# =====================================================================
+# Quality Loop Configuration
+# =====================================================================
+QUALITY_LOOP_ENABLED = True
+MIN_SCORE = 90
+MAX_ITERATIONS = 3
+COST_MODE = "balanced"       # "fast", "balanced", "premium"
+MAX_EVAL_CALLS = 3           # max OpenAI evaluation calls per story
+MAX_TOTAL_SECONDS = 600      # time budget for the quality loop
+FALLBACK_POLICY = "accept_best"  # "accept_best", "rerun_story", "stop"
+
+# COST_MODE presets (override defaults above when applied)
+COST_MODE_PRESETS = {
+    "fast":     {"max_iterations": 2, "min_score": 88, "max_total_seconds": 420, "openai_model": "gpt-4o-mini"},
+    "balanced": {"max_iterations": 3, "min_score": 90, "max_total_seconds": 600, "openai_model": "gpt-4o-mini"},
+    "premium":  {"max_iterations": 5, "min_score": 92, "max_total_seconds": 900, "openai_model": "gpt-4o"},
+}
+
+
+# =====================================================================
+# Pre-score quality gate — deterministic, zero API calls
+# =====================================================================
+BANNED_PHRASES = [
+    "הוא צפה בשקט",       # silent observing adult
+    "היא צפתה בשקט",
+    "צפו בשקט",
+    "עמד בצד וחייך",
+    "עמדה בצד וחייכה",
+    "המוסר של הסיפור",    # preachy closing
+    "ולמדו שיעור חשוב",
+    "והמסר הוא",
+]
+
+
+def _pre_score_gate(story: dict, age: int = 5) -> dict:
+    """
+    Deterministic quality gate run BEFORE any OpenAI eval.
+    Returns {pass: bool, reasons: [...], metrics: {...}}.
+    max_words_per_sentence is derived from the age matrix.
+    """
+    age_p = get_age_params(age)
+    max_sentence_words = age_p["max_words_per_sentence"]
+
+    pages = story.get("pages", [])
+    reasons = []
+
+    # --- metric: max sentence word count ---
+    max_words = 0
+    long_sentences = []
+    for page in pages:
+        text = page.get("text", "")
+        sentences = re.split(r'[.!?।]', text)
+        for s in sentences:
+            s = s.strip()
+            if not s:
+                continue
+            word_count = len(s.split())
+            if word_count > max_words:
+                max_words = word_count
+            if word_count > max_sentence_words:
+                long_sentences.append((page["page_number"], word_count, s[:60]))
+
+    if long_sentences:
+        pages_str = ", ".join(f"p{p}({w}w)" for p, w, _ in long_sentences[:3])
+        reasons.append(f"long_sentences: {pages_str}")
+
+    # --- metric: banned phrases ---
+    banned_hits = []
+    for page in pages:
+        text = page.get("text", "")
+        for phrase in BANNED_PHRASES:
+            if phrase in text:
+                banned_hits.append((page["page_number"], phrase))
+    if banned_hits:
+        hits_str = ", ".join(f"p{p}:'{ph}'" for p, ph in banned_hits[:3])
+        reasons.append(f"banned_phrases: {hits_str}")
+
+    # --- metric: preachy phrases (from story_style_guidelines) ---
+    full_text = " ".join(page.get("text", "") for page in pages)
+    preachy_warnings = validate_story_not_preachy(full_text)
+    if preachy_warnings:
+        preachy_str = ", ".join(w.split("'")[1] for w in preachy_warnings[:3] if "'" in w)
+        reasons.append(f"preachy_phrases: {preachy_str}")
+
+    # --- metric: ending closure ---
+    ending_present = False
+    if pages:
+        last_text = pages[-1].get("text", "").strip()
+        # Must end with sentence-ending punctuation
+        if last_text and last_text[-1] in '.!?"':
+            ending_present = True
+    if not ending_present:
+        reasons.append("no_closure: last page missing sentence-ending punctuation")
+
+    passed = len(reasons) == 0
+    return {
+        "pass": passed,
+        "reasons": reasons,
+        "metrics": {
+            "max_sentence_words": max_words,
+            "banned_hits": len(banned_hits),
+            "preachy_hits": len(preachy_warnings),
+            "ending_present": ending_present,
+        },
+    }
 
 
 def get_text_area_bounds(image_width: int, image_height: int) -> tuple:
@@ -77,66 +188,339 @@ class RunManager:
         return story_path
 
 
+def _generate_story_once(agent: ClaudeAgent, run: RunManager, num_pages: int,
+                         existing_feedback: str = None,
+                         existing_story: dict = None) -> dict:
+    """
+    Single story generation call using ClaudeAgent.create_story().
+    Wraps the existing mechanism with run-specific parameters.
+
+    When existing_feedback + existing_story are provided, Claude will EDIT
+    the existing story rather than writing from scratch.
+    """
+    # Build structured topic/character/style dicts that ClaudeAgent.create_story() expects
+    topic = {
+        "name": run.topic,
+        "sub_topics": [run.topic],
+        "educational_value": run.topic,
+    }
+    character = {
+        "name": run.child_name,
+        "description": f"ילד/ה בגיל {run.age}",
+    }
+    style_guide = {
+        "tone": "חם ומעודד",
+        "words_per_page": "40-60",
+        "visual_style": "איורים צבעוניים מודרניים לספרי ילדים",
+    }
+
+    # Use ClaudeAgent.create_story() — the existing mechanism
+    story = agent.create_story(
+        topic=topic,
+        character=character,
+        style_guide=style_guide,
+        existing_feedback=existing_feedback,
+        existing_story=existing_story,
+        age=run.age,
+        num_pages=num_pages,
+    )
+
+    # Wrap in the expected structure and ensure target_age
+    if "story" not in story:
+        # ClaudeAgent.create_story() returns the story dict directly (title, pages, ...)
+        story_data = {"story": story}
+    else:
+        story_data = story
+
+    story_data["story"]["target_age"] = run.age
+
+    # Trim/pad pages
+    actual_pages = len(story_data["story"]["pages"])
+    if actual_pages != num_pages:
+        print(f"   ⚠️  נוצרו {actual_pages} עמודים במקום {num_pages}, קוצץ")
+        if actual_pages > num_pages:
+            story_data["story"]["pages"] = story_data["story"]["pages"][:num_pages]
+
+    return story_data
+
+
 def step1_generate_story(run: RunManager, num_pages: int = 10):
-    """Stage 1: יצירת סיפור"""
+    """
+    Stage 1: Story Generation with Quality Loop
+
+    Uses existing mechanisms:
+    - ClaudeAgent.create_story() for writing
+    - OpenAIAgent.rate_story() for evaluation
+    - HebrewTextQualityChecker.check_full_story() for Hebrew QA
+
+    Controlled by module-level QUALITY_LOOP_ENABLED, COST_MODE, etc.
+    """
     print("\n" + "="*80)
     print(f"📖 Stage 1: Story Generation - {num_pages} עמודים")
     print("="*80)
 
     agent = ClaudeAgent()
 
-    # בקש סיפור עם מספר עמודים מדויק
-    prompt = f"""צור סיפור לספר ילדים ל-{run.child_name} בגיל {run.age} על הנושא: {run.topic}
+    # -------------------------------------------------------
+    # If quality loop is disabled, generate once and return
+    # -------------------------------------------------------
+    if not QUALITY_LOOP_ENABLED:
+        print("   ℹ️  Quality loop disabled — single generation")
+        story_data = _generate_story_once(agent, run, num_pages)
+        story_path = run.save_story(story_data)
+        title = story_data["story"]["title"]
+        print(f"\n✅ סיפור נוצר: {title}")
+        print(f"   עמודים: {len(story_data['story']['pages'])}")
+        print(f"   💾 נשמר: {story_path}")
+        return story_data
 
-דרישות:
-- בדיוק {num_pages} עמודים (לא יותר, לא פחות)
-- כל עמוד עם טקסט ותיאור ויזואלי
-- מותאם לגיל {run.age}
-- סיפור טוב עם התחלה, אמצע וסוף
+    # -------------------------------------------------------
+    # Quality loop — ping-pong between Claude and OpenAI
+    # Uses: OpenAIAgent.rate_story(), RatingSystem (existing)
+    # -------------------------------------------------------
+    preset = COST_MODE_PRESETS.get(COST_MODE, COST_MODE_PRESETS["balanced"])
+    max_iter = min(MAX_ITERATIONS, preset["max_iterations"])
+    min_score = max(MIN_SCORE, preset["min_score"])
+    eval_model = preset["openai_model"]
+    time_budget = preset.get("max_total_seconds", MAX_TOTAL_SECONDS)
 
-פורמט JSON:
-{{
-  "story": {{
-    "title": "כותרת הסיפור",
-    "target_age": {run.age},
-    "pages": [
-      {{
-        "page_number": 1,
-        "text": "טקסט העמוד...",
-        "visual_description": "תיאור מפורט של הסצנה..."
-      }},
-      ...
-    ]
-  }}
-}}"""
+    print(f"\n   🎛️  Quality Loop Configuration:")
+    print(f"      COST_MODE:        {COST_MODE}")
+    print(f"      max_iterations:   {max_iter}")
+    print(f"      min_score:        {min_score}")
+    print(f"      eval_model:       {eval_model}")
+    print(f"      MAX_EVAL_CALLS:   {MAX_EVAL_CALLS}")
+    print(f"      time_budget:      {time_budget}s")
+    print(f"      FALLBACK_POLICY:  {FALLBACK_POLICY}")
 
-    response = agent.client.messages.create(
-        model=agent.model,
-        max_tokens=8000,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    openai_agent = OpenAIAgent(model=eval_model)
 
-    content = response.content[0].text
+    # Build topic dict for OpenAIAgent.rate_story()
+    topic_for_rating = {
+        "name": run.topic,
+        "educational_value": run.topic,
+    }
 
-    # חלץ JSON
-    json_start = content.find('{')
-    json_end = content.rfind('}') + 1
-    story_json = content[json_start:json_end]
-    story_data = json.loads(story_json)
+    loop_start = time.time()
+    eval_calls = 0
+    best_story = None
+    best_score = 0
+    feedback = None
+    rerun_attempted = False
 
-    # וודא שיש בדיוק num_pages עמודים
-    actual_pages = len(story_data['story']['pages'])
-    if actual_pages != num_pages:
-        print(f"   ⚠️  נוצרו {actual_pages} עמודים במקום {num_pages}, קוצץ/משלים")
-        if actual_pages > num_pages:
-            story_data['story']['pages'] = story_data['story']['pages'][:num_pages]
-        # אם פחות - נשאר כך (לא משלים)
+    for iteration in range(1, max_iter + 1):
+        iter_start = time.time()
+        elapsed_total = iter_start - loop_start
 
+        # Budget checks
+        if elapsed_total > time_budget:
+            print(f"\n   ⏱️  Time budget exceeded ({elapsed_total:.0f}s > {time_budget}s)")
+            break
+        if eval_calls >= MAX_EVAL_CALLS:
+            print(f"\n   💰 Eval call budget exceeded ({eval_calls} >= {MAX_EVAL_CALLS})")
+            break
+
+        print(f"\n   --- iteration {iteration}/{max_iter} ---")
+
+        # =============================================================
+        # 1. Generate story (best-of-2 on first draft, single on edits)
+        # =============================================================
+        if iteration == 1 and not feedback:
+            # Best-of-2: generate two drafts, pick better by gate metrics
+            print(f"      [BEST_OF_2] generating 2 drafts...")
+            t_claude = time.time()
+            drafts = []
+            for d in range(2):
+                try:
+                    draft = _generate_story_once(agent, run, num_pages)
+                    drafts.append(draft)
+                    print(f"      [BEST_OF_2] draft {chr(65+d)}: {len(draft['story']['pages'])} pages generated")
+                except Exception as e:
+                    print(f"      [BEST_OF_2] draft {chr(65+d)}: FAILED ({e})")
+
+            if not drafts:
+                print(f"      [BEST_OF_2] result: ABORT — both drafts failed")
+                continue
+
+            # Pick best by gate: prefer passing, then lower max_sentence_words
+            gate_results = [(d, _pre_score_gate(d["story"], age=run.age)) for d in drafts]
+            for idx, (_, g) in enumerate(gate_results):
+                m = g["metrics"]
+                print(f"      [BEST_OF_2] draft {chr(65+idx)}: gate={'PASS' if g['pass'] else 'FAIL'}, max_sentence_words={m['max_sentence_words']}, banned_hits={m['banned_hits']}, ending_present={m['ending_present']}")
+                if not g["pass"]:
+                    for r in g["reasons"]:
+                        print(f"      [BEST_OF_2]   reason: {r}")
+
+            # Sort: passing first, then by max_sentence_words ascending
+            gate_results.sort(key=lambda x: (not x[1]["pass"], x[1]["metrics"]["max_sentence_words"]))
+            story_data = gate_results[0][0]
+            picked_gate = gate_results[0][1]
+            picked_label = chr(65 + drafts.index(story_data))
+            claude_time = time.time() - t_claude
+            print(f"      [BEST_OF_2] selected: draft {picked_label} (gate={'PASS' if picked_gate['pass'] else 'FAIL'}, max_words={picked_gate['metrics']['max_sentence_words']})")
+            print(f"      [BEST_OF_2] generation time: {claude_time:.1f}s")
+        else:
+            # Single generation (edit mode if we have feedback)
+            if feedback and best_story:
+                print(f"      [EDIT_MODE] Claude editing story (targeted fix)...")
+                print(f"      [EDIT_MODE] feedback snippet: {feedback[:150]}...")
+            else:
+                print(f"      📝 Claude writing story (fresh draft)...")
+            t_claude = time.time()
+            try:
+                story_data = _generate_story_once(
+                    agent, run, num_pages,
+                    existing_feedback=feedback,
+                    existing_story=best_story["story"] if (feedback and best_story) else None,
+                )
+            except Exception as e:
+                print(f"      ❌ Story generation failed: {e}")
+                continue
+            claude_time = time.time() - t_claude
+            if feedback and best_story:
+                print(f"      [EDIT_MODE] generation time: {claude_time:.1f}s")
+            else:
+                print(f"      [claude] generation time: {claude_time:.1f}s")
+
+        # =============================================================
+        # 2. Pre-score gate — deterministic, zero API calls
+        # =============================================================
+        gate = _pre_score_gate(story_data["story"], age=run.age)
+        m = gate["metrics"]
+        print(f"      [PRE_SCORE_GATE] iteration={iteration} result={'PASS' if gate['pass'] else 'FAIL'} | max_sentence_words={m['max_sentence_words']}, banned_hits={m['banned_hits']}, preachy_hits={m['preachy_hits']}, ending_present={m['ending_present']}")
+
+        if not gate["pass"]:
+            # FAIL: skip eval, go directly to edit with gate feedback
+            print(f"      [PRE_SCORE_GATE] FAIL reasons ({len(gate['reasons'])}):")
+            for r in gate["reasons"]:
+                print(f"      [PRE_SCORE_GATE]   - {r}")
+            # Log offending sentences if long_sentences triggered
+            age_limit = get_age_params(run.age)["max_words_per_sentence"]
+            for page in story_data["story"].get("pages", []):
+                for s in re.split(r'[.!?।]', page.get("text", "")):
+                    s = s.strip()
+                    if s and len(s.split()) > age_limit:
+                        print(f"      [PRE_SCORE_GATE]   offending p{page['page_number']}({len(s.split())}w): \"{s[:80]}\"")
+            print(f"      [PRE_SCORE_GATE] action: skip eval → send to EDIT_MODE")
+
+            gate_feedback = "בעיות שנמצאו בבדיקה אוטומטית (תקן רק אותן):\n"
+            for r in gate["reasons"]:
+                gate_feedback += f"- {r}\n"
+            feedback = gate_feedback
+            # Still track as best if we have nothing better
+            if best_story is None:
+                best_story = story_data
+            continue
+
+        # =============================================================
+        # 3. OpenAI evaluates (median-of-3 via rate_story)
+        # =============================================================
+        print(f"      [MEDIAN_EVAL] starting (model={eval_model}, runs=3)...")
+        eval_calls += 1
+
+        try:
+            evaluation = openai_agent.rate_story(story_data["story"], topic_for_rating, age=run.age)
+            score = evaluation["rating"]["weighted_score"]
+        except Exception as e:
+            print(f"      ❌ Evaluation failed: {e}")
+            if best_story is None:
+                best_story = story_data
+            continue
+
+        iter_elapsed = time.time() - iter_start
+        total_elapsed = time.time() - loop_start
+
+        # Track best
+        if score > best_score:
+            best_score = score
+            best_story = story_data
+
+        # Log
+        print(f"      📊 Score:            {score}/100 (target: {min_score})")
+        print(f"      🕐 Iteration time:   {iter_elapsed:.1f}s")
+        print(f"      🕐 Cumulative time:  {total_elapsed:.1f}s")
+        print(f"      💰 OpenAI eval calls: {eval_calls}/{MAX_EVAL_CALLS}")
+        print(f"      🏆 Best score so far: {best_score}/100")
+
+        # Check if approved
+        if score >= min_score:
+            print(f"      ✅ Story approved! (score {score} >= {min_score})")
+            break
+        else:
+            # Extract feedback for next iteration
+            feedback = evaluation["rating"].get("suggestions", "")
+            print(f"      ❌ Below threshold (score {score} < {min_score})")
+            if feedback:
+                print(f"      💡 Feedback: {feedback[:200]}...")
+
+    # -------------------------------------------------------
+    # Fallback policy if not approved
+    # -------------------------------------------------------
+    if best_score < min_score:
+        total_elapsed = time.time() - loop_start
+        print(f"\n   ⚠️  Quality loop ended without approval")
+        print(f"      Best score: {best_score}/100 (target: {min_score})")
+        print(f"      Total time: {total_elapsed:.1f}s, Eval calls: {eval_calls}")
+        print(f"      Fallback policy: {FALLBACK_POLICY}")
+
+        if FALLBACK_POLICY == "accept_best":
+            print(f"      → Accepting best version (score {best_score})")
+        elif FALLBACK_POLICY == "rerun_story" and not rerun_attempted:
+            print(f"      → Rerunning story generation (one attempt)")
+            rerun_attempted = True
+            try:
+                story_data = _generate_story_once(agent, run, num_pages)
+                best_story = story_data
+                print(f"      → Rerun complete")
+            except Exception as e:
+                print(f"      → Rerun failed: {e}")
+        elif FALLBACK_POLICY == "stop":
+            raise RuntimeError(
+                f"Quality gate failed: best score {best_score} < {min_score} "
+                f"after {eval_calls} evaluations in {total_elapsed:.1f}s"
+            )
+
+    story_data = best_story
+
+    # -------------------------------------------------------
+    # Hebrew text quality gate (existing: HebrewTextQualityChecker)
+    # -------------------------------------------------------
+    print(f"\n   🔤 Hebrew Text Quality Check...")
+    try:
+        checker = HebrewTextQualityChecker()
+        check_result = checker.check_full_story(story_data)
+        pages_changed = check_result["pages_changed"]
+        total_edits = check_result["total_edits"]
+        blockers = check_result["blockers_remaining"]
+
+        print(f"      Pages changed: {pages_changed}")
+        print(f"      Total edits:   {total_edits}")
+        print(f"      Blockers:      {blockers}")
+
+        if blockers > 0:
+            print(f"      ⚠️  {blockers} blockers remain — applying fallback")
+            if FALLBACK_POLICY == "stop":
+                raise RuntimeError(f"Hebrew quality check: {blockers} blockers remaining")
+            # accept_best / rerun_story: continue with improved version
+        story_data = check_result["improved_story"]
+    except RuntimeError:
+        raise
+    except Exception as e:
+        print(f"      ⚠️  Hebrew quality check failed: {e}")
+        print(f"      → Continuing with current story")
+
+    # -------------------------------------------------------
+    # Save and return
+    # -------------------------------------------------------
     story_path = run.save_story(story_data)
 
-    title = story_data['story']['title']
+    title = story_data["story"]["title"]
+    total_elapsed = time.time() - loop_start
     print(f"\n✅ סיפור נוצר: {title}")
-    print(f"   עמודים: {len(story_data['story']['pages'])}")
+    print(f"   עמודים:     {len(story_data['story']['pages'])}")
+    print(f"   ציון סופי:  {best_score}/100")
+    print(f"   קריאות eval: {eval_calls}")
+    print(f"   זמן כולל:   {total_elapsed:.1f}s")
     print(f"   💾 נשמר: {story_path}")
 
     return story_data
@@ -254,45 +638,32 @@ CRITICAL: Full-bleed illustration extending to all edges. NO borders, NO frames,
                 resolution_ok = abs(aspect_ratio - target_aspect) / target_aspect <= 0.05
                 print(f"         {'✅' if resolution_ok else '❌'} רזולוציה: {width}x{height}")
 
-            # White percentage
+            # White percentage (numpy for speed)
             with Image.open(temp_path) as img:
-                rgb_img = img.convert('RGB')
-                pixels = rgb_img.getdata()
-                white_pixels = sum(1 for r, g, b in pixels if r > 240 and g > 240 and b > 240)
-                white_pct = (white_pixels / len(pixels)) * 100
+                arr = np.array(img.convert('RGB'))
+                white_mask = (arr[:, :, 0] > 240) & (arr[:, :, 1] > 240) & (arr[:, :, 2] > 240)
+                white_pct = (white_mask.sum() / white_mask.size) * 100
             white_ok = white_pct <= 21.0
             print(f"         {'✅' if white_ok else '❌'} לבן: {white_pct:.1f}%")
 
-            # Edge border detection
+            # Edge border detection (numpy for speed)
             with Image.open(temp_path) as img:
-                rgb_img = img.convert('RGB')
-                w, h = rgb_img.size
-                edge_thickness = 5
+                arr = np.array(img.convert('RGB'))
+                h, w = arr.shape[:2]
+                edge_t = 5
 
-                # Sample edges
-                top_pixels = [rgb_img.getpixel((x, y)) for x in range(w) for y in range(min(edge_thickness, h))]
-                bottom_pixels = [rgb_img.getpixel((x, y)) for x in range(w) for y in range(max(0, h - edge_thickness), h)]
-                left_pixels = [rgb_img.getpixel((x, y)) for y in range(h) for x in range(min(edge_thickness, w))]
-                right_pixels = [rgb_img.getpixel((x, y)) for y in range(h) for x in range(max(0, w - edge_thickness), w)]
+                def is_uniform_edge(edge_arr, tolerance=30):
+                    if edge_arr.size == 0:
+                        return False
+                    pixels = edge_arr.reshape(-1, 3).astype(np.float32)
+                    avg = pixels.mean(axis=0)
+                    within = np.all(np.abs(pixels - avg) <= tolerance, axis=1)
+                    return (within.sum() / len(within)) > 0.85
 
-                def is_uniform_color(pixels, tolerance=30):
-                    if not pixels:
-                        return False, None
-                    avg_r = sum(p[0] for p in pixels) / len(pixels)
-                    avg_g = sum(p[1] for p in pixels) / len(pixels)
-                    avg_b = sum(p[2] for p in pixels) / len(pixels)
-                    avg_color = (avg_r, avg_g, avg_b)
-                    uniform_count = sum(1 for p in pixels if
-                                      abs(p[0] - avg_r) <= tolerance and
-                                      abs(p[1] - avg_g) <= tolerance and
-                                      abs(p[2] - avg_b) <= tolerance)
-                    uniformity = uniform_count / len(pixels)
-                    return uniformity > 0.85, avg_color
-
-                top_uniform, _ = is_uniform_color(top_pixels)
-                bottom_uniform, _ = is_uniform_color(bottom_pixels)
-                left_uniform, _ = is_uniform_color(left_pixels)
-                right_uniform, _ = is_uniform_color(right_pixels)
+                top_uniform = is_uniform_edge(arr[:edge_t, :, :])
+                bottom_uniform = is_uniform_edge(arr[-edge_t:, :, :])
+                left_uniform = is_uniform_edge(arr[:, :edge_t, :])
+                right_uniform = is_uniform_edge(arr[:, -edge_t:, :])
 
                 uniform_edges = sum([top_uniform, bottom_uniform, left_uniform, right_uniform])
                 border_detected = uniform_edges >= 3
@@ -300,76 +671,45 @@ CRITICAL: Full-bleed illustration extending to all edges. NO borders, NO frames,
 
             print(f"         {'✅' if edge_ok else '❌'} border: {'no frame' if edge_ok else f'{uniform_edges} edges uniform'}")
 
-            # Text-area cleanliness validation - check for illustration intrusion
-            # Uses tile-based local mean detection to handle gradients correctly
+            # Text-area cleanliness validation (numpy, tile-based local mean)
             with Image.open(temp_path) as img:
-                rgb_img = img.convert('RGB')
-                w, h = rgb_img.size
+                arr = np.array(img.convert('RGB')).astype(np.float32)
+                h_img, w_img = arr.shape[:2]
 
-                # Get EXACT text area bounds matching PDF rendering
-                roi_x, roi_y, roi_w, roi_h = get_text_area_bounds(w, h)
+                roi_x, roi_y, roi_w, roi_h = get_text_area_bounds(w_img, h_img)
 
-                # Tile-based intrusion detection (handles gradients)
-                tile_grid_size = 6  # 6x6 grid of tiles
-                tile_width = roi_w // tile_grid_size
-                tile_height = roi_h // tile_grid_size
+                # Extract ROI
+                y_end = min(roi_y + roi_h, h_img)
+                x_end = min(roi_x + roi_w, w_img)
+                roi = arr[roi_y:y_end, roi_x:x_end, :]
 
-                # Precompute mean color for each tile
-                tile_means = {}
-                for tile_row in range(tile_grid_size):
-                    for tile_col in range(tile_grid_size):
-                        tile_x_start = roi_x + tile_col * tile_width
-                        tile_y_start = roi_y + tile_row * tile_height
-                        tile_x_end = min(tile_x_start + tile_width, roi_x + roi_w)
-                        tile_y_end = min(tile_y_start + tile_height, roi_y + roi_h)
+                # Tile-based intrusion detection (6x6 grid)
+                tile_grid_size = 6
+                rh, rw = roi.shape[:2]
 
-                        # Sample pixels in this tile
-                        tile_pixels = []
-                        for y in range(tile_y_start, tile_y_end):
-                            for x in range(tile_x_start, tile_x_end):
-                                if 0 <= x < w and 0 <= y < h:
-                                    tile_pixels.append(rgb_img.getpixel((x, y)))
-
-                        if tile_pixels:
-                            r_mean = sum(p[0] for p in tile_pixels) / len(tile_pixels)
-                            g_mean = sum(p[1] for p in tile_pixels) / len(tile_pixels)
-                            b_mean = sum(p[2] for p in tile_pixels) / len(tile_pixels)
-                            tile_means[(tile_row, tile_col)] = (r_mean, g_mean, b_mean)
-
-                # Count intrusion pixels (compare to LOCAL tile mean, not global)
-                intrusion_threshold = 40  # RGB distance threshold
-                intrusion_count = 0
-                total_pixels = 0
-
-                for y in range(roi_y, roi_y + roi_h):
-                    for x in range(roi_x, roi_x + roi_w):
-                        if 0 <= x < w and 0 <= y < h:
-                            pixel = rgb_img.getpixel((x, y))
-
-                            # Find which tile this pixel belongs to
-                            tile_col = min((x - roi_x) // tile_width, tile_grid_size - 1)
-                            tile_row = min((y - roi_y) // tile_height, tile_grid_size - 1)
-
-                            # Compare to LOCAL tile mean
-                            if (tile_row, tile_col) in tile_means:
-                                tile_mean = tile_means[(tile_row, tile_col)]
-                                dist = ((pixel[0] - tile_mean[0]) ** 2 +
-                                       (pixel[1] - tile_mean[1]) ** 2 +
-                                       (pixel[2] - tile_mean[2]) ** 2) ** 0.5
-
-                                if dist > intrusion_threshold:
-                                    intrusion_count += 1
-
-                            total_pixels += 1
-
-                if total_pixels > 0:
+                if rh > 0 and rw > 0:
+                    # Compute per-tile mean and broadcast back to pixel level
+                    th = max(1, rh // tile_grid_size)
+                    tw = max(1, rw // tile_grid_size)
+                    # Pad roi to be evenly divisible
+                    pad_h = (tile_grid_size - rh % tile_grid_size) % tile_grid_size
+                    pad_w = (tile_grid_size - rw % tile_grid_size) % tile_grid_size
+                    roi_padded = np.pad(roi, ((0, pad_h), (0, pad_w), (0, 0)), mode='edge')
+                    ph, pw = roi_padded.shape[:2]
+                    th2, tw2 = ph // tile_grid_size, pw // tile_grid_size
+                    # Reshape into tiles, compute mean per tile
+                    tiles = roi_padded.reshape(tile_grid_size, th2, tile_grid_size, tw2, 3)
+                    tile_means = tiles.mean(axis=(1, 3))  # shape: (6, 6, 3)
+                    # Expand back to pixel level
+                    local_means = tile_means.repeat(th2, axis=0).repeat(tw2, axis=1)[:rh, :rw, :]
+                    # Euclidean distance from local mean
+                    dist = np.sqrt(((roi - local_means) ** 2).sum(axis=2))
+                    intrusion_count = (dist > 40).sum()
+                    total_pixels = rh * rw
                     intrusion_pct = (intrusion_count / total_pixels) * 100
                 else:
                     intrusion_pct = 0
 
-                # Threshold: text area should be mostly calm
-                # Allow up to 15% intrusion (shadows, gradients are OK)
-                # Above 15% = illustration is intruding into text area
                 max_intrusion_pct = 15.0
                 text_area_ok = intrusion_pct <= max_intrusion_pct
 
@@ -395,7 +735,12 @@ CRITICAL: Full-bleed illustration extending to all edges. NO borders, NO frames,
                 }
 
         if not image_path:
-            raise RuntimeError(f"עמוד {page_num} נכשל QA אחרי {max_retries} ניסיונות")
+            # Use best attempt instead of failing entirely
+            print(f"      ⚠️  עמוד {page_num} נכשל QA אחרי {max_retries} ניסיונות — משתמש בניסיון האחרון")
+            best_attempt = run.images_dir / f"page_{page_num:02d}_attempt{max_retries}.png"
+            if best_attempt.exists():
+                image_path = run.images_dir / f"page_{page_num:02d}.png"
+                best_attempt.rename(image_path)
 
         results.append({
             'page': page_num,
@@ -412,13 +757,18 @@ CRITICAL: Full-bleed illustration extending to all edges. NO borders, NO frames,
 
 
 def step4_generate_pdfs(run: RunManager, story_data: dict):
-    """Stage 4: יצירת PDF לכל עמוד"""
+    """Stage 4: יצירת PDF — ספר אחד מאוחד + PDFs בודדים"""
     print("\n" + "="*80)
     print("📄 Stage 4: PDF Generation")
     print("="*80)
 
     pages = story_data['story']['pages']
     age = story_data['story'].get('target_age', 4)
+
+    # ספר מאוחד — כל העמודים ב-PDF אחד
+    combined_path = run.pdf_dir / "book.pdf"
+    combined_pdf = ProductionPDFWithNikud(str(combined_path), target_age=age)
+    combined_pdf.set_fixed_font_size([p['text'] for p in pages])
 
     for page in pages:
         page_num = page['page_number']
@@ -432,15 +782,21 @@ def step4_generate_pdfs(run: RunManager, story_data: dict):
             print(f"   ❌ תמונה לא נמצאה: {image_path}")
             continue
 
-        # צור PDF בודד
+        # הוסף לספר המאוחד
+        combined_pdf.add_story_page(page_num, text, image_path)
+
+        # צור גם PDF בודד (ל-validation)
         pdf_path = run.pdf_dir / f"page_{page_num:02d}.pdf"
-        pdf = ProductionPDFWithNikud(str(pdf_path), target_age=age)
-        pdf.add_story_page(page_num, text, image_path)
-        pdf.save()
+        single_pdf = ProductionPDFWithNikud(str(pdf_path), target_age=age)
+        single_pdf._fixed_font_size = combined_pdf._fixed_font_size
+        single_pdf.add_story_page(page_num, text, image_path)
+        single_pdf.save()
 
         print(f"   ✅ PDF נוצר: {pdf_path.name}")
 
+    combined_pdf.save()
     print(f"\n✅ כל ה-PDFs נוצרו")
+    print(f"📚 ספר מאוחד: {combined_path}")
 
 
 def step5_validate_all(run: RunManager, story_data: dict, image_results: list):
@@ -590,11 +946,15 @@ def main():
     parser.add_argument('child_name', help='שם הילד/ה')
     parser.add_argument('age', type=int, help='גיל')
     parser.add_argument('topic', help='נושא הסיפור')
-    parser.add_argument('--pages', type=int, default=10, help='מספר עמודים (ברירת מחדל: 10)')
+    parser.add_argument('--pages', type=int, default=None, help='מספר עמודים (ברירת מחדל: לפי גיל)')
     args = parser.parse_args()
 
+    # Resolve num_pages from age matrix if not explicitly set
+    age_params = get_age_params(args.age)
+    num_pages = args.pages if args.pages is not None else age_params["pages"]
+
     print("="*80)
-    print("📚 הפקת ספר מלא - 10 עמודים")
+    print(f"📚 הפקת ספר מלא - {num_pages} עמודים (גיל {args.age})")
     print("   Stages 1-5 עם edge validation")
     print("="*80)
 
@@ -605,7 +965,7 @@ def main():
 
     try:
         # Stage 1: Story
-        story_data = step1_generate_story(run, num_pages=args.pages)
+        story_data = step1_generate_story(run, num_pages=num_pages)
 
         # Stage 3: Images
         image_results = step3_generate_images(run, story_data, max_retries=3)

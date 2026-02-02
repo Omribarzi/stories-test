@@ -8,14 +8,17 @@ from typing import Dict, Optional
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import landscape  # noqa: F401 (used by cover layout)
 from PIL import Image
 from bidi.algorithm import get_display
 import os
 
+import re
 from hebrew_text_processor import HebrewTextProcessor
 from hebrew_nikud_renderer import HebrewNikudRenderer
+from hebrew_text_renderer import HebrewTextRenderer
 from professional_cover_layout import ProfessionalCoverLayout
+from story_style_guidelines import get_age_params
 
 
 def calculate_ideal_font_size(age: int, text: str) -> int:
@@ -59,27 +62,6 @@ def calculate_ideal_font_size(age: int, text: str) -> int:
     return final_size
 
 
-def calculate_max_words_per_line(font_size: int) -> int:
-    """
-    מחשב מקסימום מילים לשורה בהתאם לגודל הפונט
-
-    Args:
-        font_size: גודל הפונט בנקודות
-
-    Returns:
-        מספר מקסימלי של מילים לשורה
-    """
-    # פונט גדול = פחות מילים לשורה
-    if font_size >= 26:
-        return 3  # ילדים צעירים - 3 מילים מקסימום
-    elif font_size >= 22:
-        return 4  # גיל בינוני - 4 מילים
-    elif font_size >= 20:
-        return 5  # גיל יותר מבוגר - 5 מילים
-    else:
-        return 6  # פונט קטן - 6 מילים
-
-
 class ProductionPDFWithNikud:
     """
     מחלקה ליצירת PDF production עם ניקוד מדויק
@@ -98,17 +80,37 @@ class ProductionPDFWithNikud:
         self.canvas = canvas.Canvas(str(output_path), pagesize=ipad_size)
         self.page_width, self.page_height = ipad_size
         self.text_processor = HebrewTextProcessor()
-        self.hebrew_font = self._load_font()
+        self.hebrew_font, self._font_path = self._load_font()
+        self.text_renderer = HebrewTextRenderer(self._font_path)
+        self._fixed_font_size = None  # set via set_fixed_font_size()
+
+    def set_fixed_font_size(self, pages_texts: list):
+        """Lock font size across all pages based on the longest text.
+
+        Args:
+            pages_texts: list of text strings for all pages
+        """
+        longest = max(pages_texts, key=lambda t: len(t.split()))
+        self._fixed_font_size = calculate_ideal_font_size(self.target_age, longest)
+        print(f"   📏 Fixed font size: {self._fixed_font_size}pt (based on longest page: {len(longest.split())} words)")
 
     # Base directory for resolving relative font paths
     _BASE_DIR = Path(__file__).resolve().parent.parent
 
-    def _load_font(self) -> str:
+    def _load_font(self) -> tuple:
         """
-        טוען פונט עברי מתאים
+        טוען פונט עברי מתאים.
+        Returns: (font_name, font_path)
         """
         font_configs = [
-            # Noto Sans Hebrew - bundled in repo, works in Docker
+            # Rubik - Hebrew + Latin + nikud, bundled in repo
+            {
+                "name": "Rubik",
+                "paths": [
+                    "assets/fonts/Rubik-Regular.ttf",
+                ]
+            },
+            # Noto Sans Hebrew - fallback (Hebrew only, no Latin punct)
             {
                 "name": "NotoSansHebrew",
                 "paths": [
@@ -139,13 +141,12 @@ class ProductionPDFWithNikud:
                     try:
                         pdfmetrics.registerFont(TTFont(font_config["name"], resolved))
                         print(f"✅ טעון פונט: {font_config['name']} ({resolved})")
-                        return font_config["name"]
+                        return font_config["name"], resolved
                     except Exception as e:
                         print(f"⚠️  שגיאה בטעינת {font_config['name']}: {e}")
                         continue
 
-        print("⚠️  לא נמצא פונט עברי, משתמש ב-Helvetica")
-        return 'Helvetica'
+        raise RuntimeError("No Hebrew font found. Ensure assets/fonts/Rubik-Regular.ttf exists.")
 
     def _resolve_font_path(self, path: str) -> str:
         """Resolve a font path — absolute paths stay as-is, relative paths resolve from _BASE_DIR."""
@@ -208,79 +209,71 @@ class ProductionPDFWithNikud:
         else:
             print(f"      image_path: NONE (white background only)")
 
-        # טקסט מונח על התמונה בצד ימין
-        # התמונה כבר כוללת שטח ריק בצד ימין (40% מהתמונה) לטקסט
-        text_area_width = self.page_width * 0.35  # 35% מרוחב העמוד לטקסט
+        # טקסט מונח על התמונה בצד ימין (35% מרוחב העמוד)
+        text_area_width = self.page_width * 0.35
         text_x = self.page_width - 30  # מיישר ימינה עם מרווח קטן מהקצה (30px במקום 60px)
         text_y = self.page_height - 100
 
         # טקסט הסיפור עם ניקוד - צבע כהה לקריאות
         self.canvas.setFillColorRGB(0, 0, 0)  # שחור מלא לקריאות טובה
 
-        # הוסף ניקוד לטקסט - משתמש ב-Claude API לניקוד מלא
+        # --- ניקוד ---
         text_with_nikud = self.text_processor.add_nikud(text, use_api=True)
 
-        # חישוב גודל פונט אידיאלי
-        font_size = calculate_ideal_font_size(self.target_age, text)
+        # --- ניקוי טקסט (Rule 7) ---
+        # Strip leading/trailing whitespace, normalize internal spaces
+        text_with_nikud = re.sub(r' {2,}', ' ', text_with_nikud).strip()
+
+        # חישוב גודל פונט אידיאלי — use fixed size if set for consistency
+        font_size = self._fixed_font_size or calculate_ideal_font_size(self.target_age, text)
         line_height = int(font_size * 1.8)  # רווח גדול לניקוד (1.8x גודל הפונט)
 
-        # חישוב מקסימום מילים לשורה לפי גודל פונט
-        max_words_per_line = calculate_max_words_per_line(font_size)
+        # מגבלות שורה — מ-AGE_PARAMS (מקור אמת יחיד)
+        age_params = get_age_params(self.target_age)
+        max_words_per_line = age_params["words_per_line"]
 
-        # פצל לפי משפטים
-        sentences = text_with_nikud.split('.')
+        # --- שבירת שורות: word-wrap פשוט (בלי פיצול משפטים) ---
+        # נמנע משבירת דיאלוגים ומרכאות יתומות
+        words = text_with_nikud.split()
+        all_lines = []
+        current_line = []
 
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
+        for word in words:
+            test_line = ' '.join(current_line + [word])
+            raw_width = self.text_renderer.measure_width(test_line, font_size)
+            words_in_line = len(current_line) + 1
 
-            sentence = sentence + '.'
+            if (raw_width <= text_area_width and
+                    words_in_line <= max_words_per_line):
+                current_line.append(word)
+            else:
+                if current_line:
+                    all_lines.append(' '.join(current_line))
+                current_line = [word]
 
-            # פצל משפט למילים
-            words = sentence.split()
-            lines = []
-            current_line = []
+        if current_line:
+            all_lines.append(' '.join(current_line))
 
-            for word in words:
-                test_line = ' '.join(current_line + [word])
-                # בדיקת רוחב משוערת
-                test_display = get_display(test_line)
-                line_width = self.canvas.stringWidth(test_display, self.hebrew_font, font_size)
+        # --- Anti-orphan: prevent single-word lines ---
+        # If a line has only 1 word and the previous line has 3+ words,
+        # move the last word from the previous line to this one.
+        for i in range(len(all_lines) - 1, 0, -1):
+            words_this = all_lines[i].split()
+            words_prev = all_lines[i - 1].split()
+            if len(words_this) == 1 and len(words_prev) >= 3:
+                moved = words_prev.pop()
+                all_lines[i - 1] = ' '.join(words_prev)
+                all_lines[i] = moved + ' ' + all_lines[i]
 
-                # בדיקה משולשת: רוחב, מספר מילים, ומספר תווים
-                words_in_line = len(current_line) + 1
-                chars_in_line = len(test_line)  # כולל רווחים וסימני פיסוק
-                max_chars_per_line = 23
+        # צייר כל שורה — Core Text / libraqm for perfect nikud
+        for line in all_lines:
+            if text_y < 100:
+                break
 
-                if (line_width <= text_area_width and
-                    words_in_line <= max_words_per_line and
-                    chars_in_line <= max_chars_per_line):
-                    current_line.append(word)
-                else:
-                    if current_line:
-                        lines.append(' '.join(current_line))
-                    current_line = [word]
+            self.text_renderer.draw_right_aligned(
+                self.canvas, text_x, text_y, line, font_size)
 
-            if current_line:
-                lines.append(' '.join(current_line))
-
-            # צייר כל שורה עם ניקוד מדויק
-            for line in lines:
-                if text_y < 100:  # אין מספיק מקום
-                    break
-
-                # חשב רוחב השורה
-                line_display = get_display(line)
-                line_width = self.canvas.stringWidth(line_display, self.hebrew_font, font_size)
-
-                # צייר עם HebrewNikudRenderer
-                HebrewNikudRenderer.draw_text_with_nikud_pdf(
-                    self.canvas, text_x - line_width, text_y,
-                    line, self.hebrew_font, font_size
-                )
-
-                text_y -= line_height
+            text_y -= line_height
 
         # מספר עמוד בתחתית בצד ימין - רק ספרה
         self.canvas.setFont(self.hebrew_font, 14)
@@ -388,6 +381,7 @@ def create_production_pdf(story_data: Dict, images_dir: Optional[Path], output_p
                 print(f"   ⚠️  לא נמצאה תמונת כריכה")
 
     pdf.add_cover_page(title, age, cover_image)
+    pdf.set_fixed_font_size([p['text'] for p in pages])
 
     # עמודי סיפור
     for page in pages:

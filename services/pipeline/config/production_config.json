@@ -1,0 +1,142 @@
+{
+  "schema_version": "1.0",
+  "story_generation": {
+    "quality_threshold": 90.0,
+    "max_iterations": 1,
+    "max_retries_on_error": 2,
+    "criteria": {
+      "total_points": 100,
+      "breakdown": [
+        {"name": "רגע_אמת", "max_points": 15, "description": "הדמות מתמודדת עם משהו אמיתי"},
+        {"name": "לא_הסבר", "max_points": 15, "description": "מראה במקום לספר"},
+        {"name": "קצב", "max_points": 10, "description": "מהירות ומתח"},
+        {"name": "חיזוק_נדיר", "max_points": 15, "description": "פרסים רגשיים נדירים"},
+        {"name": "סיום_לא_מלמד", "max_points": 15, "description": "סוף פתוח"},
+        {"name": "דמות_עושה", "max_points": 10, "description": "הדמות פעילה"},
+        {"name": "פרטים_קטנים", "max_points": 10, "description": "תצפיות קטנות"},
+        {"name": "לא_סוגר_הכל", "max_points": 10, "description": "שאלות פתוחות"}
+      ],
+      "age_bonus": {"max_points": 10, "description": "התאמה לגיל"}
+    },
+    "pages_by_age": {
+      "2": 10,
+      "3": 15,
+      "4": 16,
+      "5": 18,
+      "6": 20,
+      "7": 22,
+      "8": 22,
+      "9": 22
+    }
+  },
+  "text_quality": {
+    "fail_on_issues": false,
+    "warn_on_issues": true,
+    "max_issues_before_block": 10,
+    "checks": {
+      "grammar": {"enabled": true, "weight": 0.3},
+      "age_appropriateness": {"enabled": true, "weight": 0.3},
+      "natural_flow": {"enabled": true, "weight": 0.2},
+      "image_match": {"enabled": true, "weight": 0.2}
+    },
+    "auto_fix": true
+  },
+  "image_generation": {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash-image",
+    "resolution": {
+      "width": 1024,
+      "height": 768,
+      "aspect_ratio": "4:3"
+    },
+    "max_retries_per_image": 3,
+    "retry_delay_seconds": 2,
+    "validation": {
+      "max_white_percent_in_source": 5.0,
+      "min_colored_area_percent": 95.0,
+      "check_for_text": true,
+      "check_resolution": true
+    },
+    "layout": {
+      "illustration_percent": 60,
+      "text_area_percent": 40,
+      "text_area_must_be_colored": true
+    },
+    "cache_prompts": true
+  },
+  "pdf_generation": {
+    "page_size": [1024, 768],
+    "fonts": {
+      "primary": "Arial",
+      "fallback": "Helvetica"
+    },
+    "font_size": {
+      "dynamic": true,
+      "base_by_age": {
+        "2-4": 24,
+        "5-6": 22,
+        "7-9": 20
+      },
+      "adjustment_by_word_count": {
+        "<15": 4,
+        "15-24": 2,
+        "25-39": 0,
+        "40-59": -2,
+        "60+": -3
+      },
+      "min": 18,
+      "max": 30
+    },
+    "nikud": {
+      "enabled": true,
+      "provider": "claude_api",
+      "cache_enabled": true,
+      "cache_path": "qa/nikud_cache.json",
+      "fallback_to_manual": true
+    },
+    "layout": {
+      "text_area_width_percent": 35,
+      "line_height_multiplier": 1.8,
+      "margin_right": 60,
+      "margin_top": 100
+    }
+  },
+  "validation": {
+    "image_fills_page": {
+      "enabled": true,
+      "max_white_percent": 21.0,
+      "fail_on_exceed": true,
+      "sampling_step": 50
+    },
+    "nikud_coverage": {
+      "enabled": true,
+      "min_ratio_percent": 30.0,
+      "fail_on_low": true,
+      "note": "30% הוא מינימום - בפועל צריך להיות הרבה יותר"
+    },
+    "text_not_overlapping": {
+      "enabled": true,
+      "max_avg_diff": 30.0,
+      "fail_on_exceed": true,
+      "sample_left_percent": 60
+    },
+    "character_consistency": {
+      "enabled": true,
+      "fail_on_mismatch": false,
+      "warn_only": true
+    }
+  },
+  "costs_tracking": {
+    "enabled": true,
+    "providers": {
+      "claude": {"per_1k_input": 0.003, "per_1k_output": 0.015},
+      "gemini": {"per_image": 0.0025}
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "save_prompts": true,
+    "save_responses": true,
+    "verbose": true
+  }
+}

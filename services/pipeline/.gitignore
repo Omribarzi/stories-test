@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Environment
+.env
+.env.*
+
+# Generated output
+data/runs/
+data/output/
+data/images/
+data/stories/
+data/temp/
+output_3pages/
+tmp/
+output/
+runs/
+logs/
+
+# Generated media
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

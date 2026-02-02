@@ -4,9 +4,8 @@ Image Generator - מערכת גנרית ליצירת תמונות
 """
 import os
 import json
-import base64
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
 import requests

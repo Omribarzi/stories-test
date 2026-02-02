@@ -51,7 +51,7 @@ class ProfessionalCoverLayout:
                     try:
                         pdfmetrics.registerFont(TTFont(font_config["name"], font_path))
                         return font_config["name"]
-                    except:
+                    except Exception:
                         continue
         return 'Helvetica-Bold'
 
